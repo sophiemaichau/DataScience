@@ -1,0 +1,1 @@
+# README for dataset The dataset was downloaded from: https://img.jgi.doe.gov/cgi-bin/m/main.cgiAfter download it was filtered and edited to only containe Finished genomes.It is saved in tab separated format

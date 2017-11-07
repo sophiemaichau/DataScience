@@ -1,0 +1,324 @@
+---
+title: "Data Science - project 1"
+output:
+  html_document: default
+  html_notebook: default
+  pdf_document: default
+---
+
+```{r "setup", include=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "~/Desktop/ds")
+```
+
+```{r message = F}
+install.packages("tidyverse")
+library(tidyverse)
+```
+
+This project centers around the analysis of genotype data for a number of SNPs from the Drosophila Melanogaster Reference Panel (DGRP). The initial dataset is very big (2GB). The initial challenge is to limit the dataset to a small region of interest, and from here to do statistical analysis of variables extracted from the genotype data.
+
+Some of the algorithms applied in this project are very inefficient. This, along with the fact that the data is very big, means that analysis  is very slow. Because of this, new data frames that are produced during the analysis is saved as a new file. These files will be referenced throughout the project.
+
+#### Q0: Import the data
+
+The central data comes as a space delimited table. To open this, I chose to use the read_table2 package from the tidyverse:
+
+```{r}
+dgrp2_full = read_table2("dgrp2.tgeno", progress = T)
+```
+
+The following is a quick glance at the data. Every row of the data frame is a polymorphic site of the Drosophila Genome, and every column is a statistic associated with every SNP. 
+
+```{r}
+dim(dgrp2_full)
+
+dgrp2_full %>%
+  select(-starts_with("line")) %>%
+  names()
+
+table(dgrp2_full$chr)
+```
+
+This shows that there are 4438427 polymorphic sites, and 214 columns. These columns are:
+
+* chr : Chromosome. There are 4 chromosomes, called chr 2, 3, 4, and X. Chromosomes 2 and 3 are divided into left and right arms 2L+2R and 3L+3R.
+* pos : The position of the polymorphic site in the chromosome
+* id  : Special id assigned to each site. The final part of ID tells what kind of polymorphism it is.
+* ref : Reference allele
+* alt : Alternative allele
+* refc: Total number of observed reference alleles in data
+* altc: Total number of observed alternate alleles in data
+* qual: Quality values for each row
+* cov : Coverage
+
+Besides these, there are 205 columns (all starting with "line"), that denote the raw genotyoe data. Each column corresponds to one individual genotype. A 0 in this column means that the individual is homozygous for the reference allele, 2 means homozygous for the alternate. A "-" is missing data. As the lines are heavily inbred, there are no heterozygotes.
+
+#### Q1: Extract the first 100,000 SNPs located on chromosome 3
+
+This is very simple, especially when using the packages provided in tidyr:
+
+```{r}
+dgrp2_3L <- dgrp2_full %>%
+  filter(chr == "3L") %>%
+  head(100000)
+
+dgrp2_3L$pos %>% head(5)
+dgrp2_3L$pos %>% tail(5)
+```
+
+This shows that the first polymorphic site on chr 3L is located at pos 19766. Pol. site number 100,000 is located at position 2291523.
+
+From here, we want to filter the polymorphic sites by how well they were genotyped, i.e. we want to filter out rows that have a lot of missing data. We should be able to calculate the amount of genotyped SNPs using the columns refc and altc, which counts the number of times that a specific genotype has been observed. To see if we can trust these values, we can count these ourselves in the line data:
+
+```{r}
+lines <- dgrp2_3L %>%
+  select(starts_with("line")) %>%
+  mutate(num_0s = rowSums(. == "0"),
+         num_2s = rowSums(. == "2"),
+         num_nans = rowSums(. == "-"))
+
+# Spoiler alert: Yes we can.
+lines %>% select(num_0s, num_2s) %>% head(10)
+dgrp2_3L %>% select(refc, altc)  %>% head(10)
+```
+
+From here, we define a new column p_gen to denote the fraction of genotyped individuals:
+
+```{r}
+dgrp2_3L$nanc <- lines$num_nans
+dgrp2_3L %>%
+  head(10) %>% View()
+
+rm(lines)
+
+# The actual p_genotyped variable:
+dgrp2_3L <- dgrp2_3L %>% 
+  mutate(p_gen = (refc + altc) / (refc + altc + nanc)) %>%
+  select(id, chr, pos, ref, alt, refc, altc, nanc, cov, qual, p_gen, everything()) # Just to make it pretty
+```
+
+From here on, I am also focusing on SNPs. Some of the poly. sites in the data are deletions or insertons, where entire chunks are denoted instead of single bases. Applying the filter from p_gen also leads to the following number of rows kept in the data, when filtering for 75%, 80%, 90% and 95%:
+
+```{r}
+bases = c("A", "T", "C", "G")
+dgrp2_3L %>%
+  filter(p_gen >= 0.75 & ref %in% bases & alt %in% bases) %>% nrow(.)
+dgrp2_3L %>%
+  filter(p_gen >= 0.80 & ref %in% bases & alt %in% bases) %>% nrow(.)
+dgrp2_3L %>%
+  filter(p_gen >= 0.90 & ref %in% bases & alt %in% bases) %>% nrow(.)
+dgrp2_3L <- dgrp2_3L %>%
+  filter(p_gen >= 0.95 & ref %in% bases & alt %in% bases)
+```
+
+These filters keep 88530, 88048, 86172, and 81879 SNPs resectively. Only rows with p_gen over 0.95 are used at this point.
+
+#### Q2: Graph the distribution of SNP allele frequencies, distribution of SNP coverage, and distribution of the number of lines genotyped
+
+Graphing the distribution of alternate allele frequencies show that there are many SNPs in the dataset that have almost no observations in the dataset. This is to be expected, as the alternate alleles almost by definition are going to have low frequency. Perhaps more interesting is the fact that there are a few alternate alleles that have very high frequencies.
+
+```{r}
+# Alternate allele freq distribution
+ggplot(data = dgrp2_3L) +
+  geom_histogram(mapping = aes(x = altc/205), col = "black") +
+  labs(title = "Distribution of SNP allele frequencies") +
+  xlab("Alternate allele frequency")
+```
+
+Graphing the distribution of coverage shows that there is a pretty and unimodal distribution of coverages. Very few SNPs have coverage exceeding 100.
+
+```{r}
+# Coverage distribution
+ggplot(data = dgrp2_3L) +
+  geom_histogram(mapping = aes(x = cov), col = "black", bins = 50) +
+  labs(title = "Distribution of coverage") +
+  xlab("Coverage")
+```
+
+A more intuitive way of plotting the coverage is to do it with a dotplot based on chromosome position, where it becomes immediately apparent that there is a mean coverage hovering around 25-30, with a somewhat significant deal of variation:
+
+```{r}
+# Coverage along genome
+ggplot(data = dgrp2_3L) +
+  geom_point(mapping = aes(x = pos, y = cov)) +
+  labs(title = "SNP coverage along chromosome 3L") +
+  xlab("Position")+
+  ylab("Coverage")
+```
+
+As the data has already been filtered for high frequency of genotyped, most NSP have about 200 lines genotyped:
+
+```{r}
+ggplot(data = dgrp2_3L) +
+  geom_histogram(mapping = aes(x = refc + altc), col = "black")
+```
+
+To see if there is a statistical association between the type of SNP and its frequency, we first define a low frequency SNP as a a SNP with a minor allele frequency of less than 0.05:
+(At the same time, we define a categorical called low_cov, which is a boolean designator if SNP coverage is in the lower)
+
+```{r}
+dgrp2_3L <- dgrp2_3L %>%
+  mutate(rare = (refc / (refc + altc)) < .05,
+         low_cov = cov < sort(dgrp2_3L$cov)[floor(0.05 * nrow(dgrp2_3L))])
+```
+
+One thing that can be tested is whether or not there is a tendency for nucleotides to mutate into a purine (G/C), rather than pyrimidine (A/T). The idea is to create a contingency table, where 2 rows are either GC AT mutations, and columns denote how many rare alleles are in this category. This can then be checked with a Fisher's exact test, comparing odds ratios.
+
+```{r}
+AT <- filter(dgrp2_3L, alt %in% c("A", "T"))
+GC <- filter(dgrp2_3L, alt %in% c("G", "C"))
+
+table(AT$rare)
+table(GC$rare)
+
+cont_table = matrix(data = c(50958, 30239, 255, 427), nrow = 2, ncol = 2)
+cont_table
+
+fisher.test(cont_table)
+```
+
+The p-value for this test is < 2.2e-16, indicating that it does indeed make sense to assume that A/T mutations are much rarer than G/C mutations.
+
+#### Q3: If coverage was homogenous throughout the genome, what probability distribution is expected to capture well the coverage?
+
+As the coverage can be seen as a variable that denotes an "event" across an axis of time or space, a poisson distribution should be a reasonable model to test. It should be noted that the poisson distribution needs a lambda parameter, i.e. it needs a certain mean.
+
+For a "pure" Poisson distribution, the variance of the stochastic is going to be equal to its mean. As such, a very common way of testing this is by using variance-to-mean ratios as a test statistic. One could easily imagine a permutation test where random coverages are modeled across a genome, and every permutation records variance and mean, while the lambda is set to be the mean coverage observed from the data.
+
+Another way of testing is to us a categorical goodness-of-fit test, which is what I do in the next question
+
+#### Q4: Make goodness of fit test of the coverage data: is the theoretical distribution proposed in Q3 a good fit for the data?
+
+The idea here is to divide the data into a number of bins (arbitrarily chosen as 750), and record the number of SNPs with low coverage. These values in each bin are then compared to values you would expect from a Poisson distribution with 
+
+```{r}
+dgrp2_3L$bin <- cut(dgrp2_3L$pos, breaks = seq(0, 2291523, length.out = 501), labels = 1:500)
+dgrp2_3L <- dgrp2_3L %>% select(bin, everything())
+
+plot(table(dgrp2_3L$bin)) # Just a quick check to see how many SNPs are in each bin
+
+tester = dgrp2_3L %>%
+  group_by(bin) %>%
+  summarise(tot_rares = sum(rare),
+            tot_low_cov = sum(low_cov))
+tester
+
+###
+
+emissions = as.numeric(unlist(names(table(tester$tot_low_cov))))
+observed  = as.vector(table(tester$tot_low_cov))
+
+# Finding Lambda
+count = 0
+for(i in 1:length(emissions)){
+  count = count + observed[i] * emissions[i]
+}
+lambda = count / sum(observed)
+
+total = sum(observed)
+expected = total*((lambda^emissions)*exp(-lambda))/factorial(emissions)
+
+ggplot() +
+  geom_point(aes(x = emissions, y = observed), color = "blue") +
+  geom_point(aes(x = emissions, y = expected), color = "red")
+
+chi_squared = sum( (observed - expected)^2/expected )
+chi_squared
+```
+
+As seen on the figure, the distribution of coverage _can_ be mistaken for a poisson distributed variable, especially in bins where there are many observations. Around the peak of the expected poisson, the expected and observed values show high discrepancy. This is one of the reason we get an obscenely low p-value, so low that my mac says it is:
+
+
+```{r}
+pchisq(chi_squared, length(observed) - 1, lower.tail = F)
+```
+
+The conclusion being that coverage along the chromosome was NOT distributed randomly by an underlying Poisson distribution
+
+#### Q5. Pick a small (100 kb) region on chromosome 3L. Graph frequency of "0" alleles along region. Explore LD
+
+I chose a 100kb region on chr 3L, from pos 100,000 to 200,000 - this gave me 336 SNPs to work with:
+
+```{r}
+small_region = dgrp2_3L %>%
+  filter(pos > 100000 & pos < 200000 & p_gen == 1) %>%
+  select(pos, refc, altc, starts_with("line")) %>%
+  mutate(ref_freq = refc / 205, alt_freq = altc / 205, tot = ref_freq + alt_freq) 
+```
+
+Plotting the regions shows that there generally are "0" genotypes througout, with a few outliers. There is also a small gap with no SNPs.
+
+```{r}
+ggplot(data = small_region) + 
+  geom_point(mapping = aes(x = pos, y = refc)) +
+  labs(title = "Frequency of homozygous reference on chr 3L") +
+  xlab("Genomic position") +
+  ylab("Frequency of reference allele")
+```
+
+From now on, I want to calculate the Linkage Disequilibrium of all pairs of SNPs. The aim is to see how "Linked" 2 SNPs are, as a function of how far they are apart. I am using a simple LD statistic, D = p(AB)p(ab)-p(aB)p(Ab). To do thís, I need the connection frequencies, which turned out to be incredibly tedious, the way I implemented it. As such, I show the code here, but running it will take a few hours. I am sure there are better algorithmic strategies to be applied, but this is what I have:
+
+DON'T RUN - TAKES A LONG TIME!
+```{r eval = F}
+pairs = small_region %>%
+  set_names(paste0(names(.), "_0")) %>%
+  crossing(small_region) %>%
+  filter(pos != pos_0) %>%
+  mutate(dist = abs(pos - pos_0))
+
+freq_00 = NULL; freq_22 = NULL; freq_02 = NULL; freq_20 = NULL
+for(i in 1:nrow(pairs)){
+  f_00 = 0; f_22 = 0; f_02 = 0; f_20 = 0
+  
+  for(j in 4:208){
+    if(pairs[i,j] == "0" & pairs[i,(j + 211)] == "0"){
+      f_00  = f_00 + 1
+    } else if(pairs[i,j] == "2" & pairs[i, (j + 211)] == "2"){
+      f_22 = f_22 + 1
+    } else if(pairs[i,j] == "0" & pairs[i, (j + 211)] == "2"){
+      f_02 = f_02 + 1
+    } else if(pairs[i,j] == "2" & pairs[i, (j + 211)] == "0"){
+      f_20 = f_20 + 1
+    }
+  }
+  
+  freq_00 = c(freq_00, f_00)
+  freq_22 = c(freq_22, f_22)
+  freq_02 = c(freq_02, f_02)
+  freq_20 = c(freq_20, f_20)
+  
+  if(i %% 50 == 0){
+    print(paste("line: ", i))
+  }
+}
+
+final = cbind(pairs, freq_00, freq_22, freq_02, freq_20) 
+```
+
+Instead, I ran the algorithm once overnight, and wrote it to a csv - should be attached to this project:
+```{r message = F, echo = T}
+final = read_csv("final.csv", progress = F)
+```
+
+I then change from counts to freqs, and calculate D:
+```{r}
+tester_2 = final %>%
+  mutate(freq_00 = freq_00/205,
+         freq_22 = freq_22/205,
+         freq_02 = freq_02/205,
+         freq_20 = freq_20/205) %>%
+  select(-starts_with("line"))
+tester_2 = tester_2 %>%
+  mutate(D = freq_00 * freq_22 - freq_02 * freq_20)
+```
+
+Giving me this final plot:
+```{r}
+ggplot(data = tester_2, mapping = aes(x = dist, y = D)) +
+  geom_point() +
+  labs(title = "LD decay with physical distance") +
+  xlab("Distance between SNPs")
+```
+
+My choice of LD stat might be giving me some issues, as the data seems to be "quantized" in some way, that I can't explain. There is however a quite an apparent trend of low linkage, as the distance between SNPs rises.
