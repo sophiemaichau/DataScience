@@ -78,3 +78,15 @@ for(k in 1:length(oc_list)){
     occ[k,i] <- nrow(filter(filter(d11, country==countries$country[i-1]), occupation==oc_list[k]))
   }
 }
+
+# The most popular occupation among Stack overflow users
+occ["SumCountries"] <- NA
+for(i in 2:20){
+  for(k in 1:length(oc_list)){
+    occ$SumCountries[k] <- rowSums(filter(occ, occupation==oc_list[k])[2:20])
+  }
+}
+maxval <- max(occ$SumCountries)
+filter(occ, SumCountries==maxval)$occupation # Web Application Developer
+maxval/sum(occ$SumCountries) # 40,28% of Stackoverflow users are webapp devops
+
