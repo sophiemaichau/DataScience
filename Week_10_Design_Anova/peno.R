@@ -30,6 +30,7 @@ d = read.csv("aggression.csv", header=T, sep=" ")
 names(d)
 
 colnames(d) = c("line_id", "snp1", "snp2", "snp3", "snp4", "aggression")
+names(d)
 
 d1 = filter(d, snp1!="-")
 d2 = filter(d, snp2!="-")
@@ -124,9 +125,9 @@ f_values_frame = data.frame(f1 = unlist(f1),
 melted_frame <- melt(f_values_frame)
 
 ggplotly(
-ggplot(melted_frame, aes(x=value, colour=variable)) +
-  geom_histogram(bins = 23) +
-  facet_wrap(~variable)
+  ggplot(melted_frame, aes(x=value, colour=variable)) +
+    geom_histogram(bins = 23) +
+    facet_wrap(~variable)
 )
 
 #lm(data=agression, Aggression ~ X3L1)
