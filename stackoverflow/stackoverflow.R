@@ -3,7 +3,6 @@
 library(tidyverse)
 library(ggrepel)
 library(plotly)
-library(ggrepel)
 
 # Loading data sets from 2011-2017
 d11 = read.csv("2011sosr.csv", header = F)
@@ -49,14 +48,30 @@ distOcc = function(d, year){
   pie(occ$SumCountries, labels = oc_list, main=paste(c("Pie Chart of occupations (", year, ")"), collapse=""))
 }
 
+
+
+
+distLanguage = function(d, year){
+  for(i in 4:14){
+    language <- as.factor(colnames(d11)[i])
+    print(language)
+    #length(filter(d, language != "")$language)
+  }
+}
+
 #### 2011 ####
 
 # Cleaning up in the data and take out what I think are interesting
 # Country, age, occupation, programming languages and OS.
-d11 <- d11[-c(1,2),c(1,3,7,31:41,44)]
-colnames(d11) = c("country","age","occupation","java","javascript","css","php","python","ruby","sql","c#","c++","c","perl","os")
+d11 <- d11[-c(1,2),c(1,3,7,31:41)]
+colnames(d11) = c("country","age","occupation","java","javascript","css","php","python","ruby","sql","c#","c++","c","perl")
 
+distLanguage(d11[,4], 2011)
 
+languages <- data.frame(d11[1,c(4:14)])
+languages[,1] <- length(filter(d11, java != "")$java)
+languages[,2] <- length(filter(d11, python != "")$python)
+languages[,3] <- length(filter(d11, css != "")$css)
 
 #### Countries and number of users
 
@@ -134,32 +149,33 @@ pie(occ$SumCountries, labels = oc_list, main="Pie Chart of occupations (2011)")
 
 
 #### Distribution of occupations from 2012 ####
-d12 <- d12[-c(1,2),c(1,3,7)]
-colnames(d12) = c("country","age","occupation")
+d12 <- d12[-c(1,2),c(1,3,7,23:35)]
+colnames(d12) = c("country","age","occupation","java","javascript","css","php","python","objective-c","ruby","sql","c#","c++","c","perl", "html5")
 
 distOcc(d12, 2012)
 
 #### Distribution of occupations from 2013 ####
-d13 <- d13[-c(1,2),c(1,3,7)]
-colnames(d13) = c("country","age","occupation")
+d13 <- d13[-c(1,2),c(1,3,7,57:62,64:69)]
+colnames(d13) = c("country","age","occupation","c","c++","c#","java","javascript","jquery","nodejs","objective-c","php","python","ruby","sql")
 
 distOcc(d13, 2013)
 
 
 #### Distribution of occupations from 2014 ####
-d14 <- d14[-c(1,2),c(1,4,7)]
-colnames(d14) = c("country","age","occupation")
+d14 <- d14[-c(1,2),c(1,4,7,43:53,55:65)]
+colnames(d14) = c("country","age","occupation","c","c++","c#","java","javascript","nodejs","objective-c","php","python","ruby","sql","nodejs","haskell","coffeescript","dart","c++11","redis","mongodb","f#","go","hadoop","angularjs")
 
 distOcc(d14, 2014)
 
 #### Distribution of occupations from 2015 ####
-d15 <- d15[-c(1,2),c(1,2,6)]
-colnames(d15) = c("country","age","occupation")
+d15 <- d15[-c(1,2),c(1,2,6,11:15,17,23,27:29,31:33,35:39,45,47,50)]
+colnames(d15) = c("country","age","occupation","anuglar","c","c++","c++11","c#","coffeescript",
+                  "go","java","javascript","lamp","mongodb","nodejs","objective-c","php","python",
+                  "R","redis","ruby","sql","swift","wordpress")
 
 distOcc(d15, 2015)
 
 #### Distribution of occupations from 2016 ####
-d16 <- d16[-c(1,2),c(3,6,10)]
 colnames(d16) = c("country","age","occupation")
 
 distOcc(d16, 2016)
@@ -169,3 +185,5 @@ d17 <- d17[-c(1,2),c(4,16)]
 colnames(d17) = c("country","occupation")
 
 distOcc(d17, 2017)
+
+
