@@ -1,0 +1,485 @@
+---
+title: Data science in Bioinformatics
+author: Sophie Mai Chau, 201404403
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: html_notebook
+---
+
+<br/>
+
+In this final assignment we will analyze the model plant legume "Medicago truncatula".
+
+<br/>
+
+### 1. Import and filter the dataset in R.
+
+```{r}
+library(tidyverse)
+library(car)
+library(boot)
+
+d = read.csv("Data_Mt_DSBionf.csv", header = T)
+d$chr <- as.factor(d$chr) # easier to work with
+d$rho_kb <- d$rho_kb/1000 # divide by 1000 so rho_kb and qp.site has the same scale
+n <- nrow(d)
+d
+```
+
+<br/>
+
+#### Structure of the data set.
+
+The meta data from Medicago truncatula data set has 1880 rows, where each row represents a genome of M. truncatula type. The data set contains following column headings:
+
+* <b>window</b>: X window number (irrelevant).
+
+* <b>chr</b>: chromosome of the M. truncatula genome. 7 types of chromosomes are available in this dataset (1,2,3,4,5,7,8).
+
+* <b>start</b>: 8 types of start (1-8). Start codons?
+
+* <b>LdH_SNPs</b>: number of SNPs in a window used to calculate LD and recombination rate - 709 different sizes.
+  
+* <b>LdH_start</b>t: start of window.
+
+* <b>ldH_win_size</b>: physical windows size.
+
+* <b>rho_kb</b>: estimated population scaled recombination rate per kb.
+
+* <b>rho_theta</b>: recombination ratio, rho divided by theta.
+
+* <b>mutations</b>: number of mutations.
+
+* <b>SNPs</b>: Single Nucleotide Polymorphisms singletons.
+
+* <b>singletons</b>: 789 different singletons.
+
+* <b>TajimasD</b>: statistic describing how many rare SNP are found relative to common ones. Zero is the expectation under selective neutrality in a stable population. An excess of rare alleles yields negative Tajima's D value and conversely an excess of frequent SNP yields positive values. 789 different.
+
+* <b>qp.site</b>: (also called Theta_pi) scaled mutation as estimated through mean nucleotide/polymorphism diversity per site.
+
+* <b>qw.site</b>: (also called Theta_w) scaled mutation as estimated through the mean number of segregating sites (standardized per site). 652 different.
+
+* <b>dist_cent</b>: distance from the start of the window to the centromere (negative values are used for the left arm). 740 different.
+
+* <b>prop_dist</b>: distance to the centromere scaled by the length of the chromosomal arm (negative).
+
+* <b>gene_dens</b>: gene density estimated as the proportion of window that is predicted to be coding (percentage). 
+
+#### Choosing subset of the data set.
+
+```{r}
+summary(d$LdH_SNPs)
+```
+
+The 1st quantile of LdH_SNPS is 297. We will exclude genomes with windows that have less than 297 SNPs.
+
+```{r}
+d <- filter(d, LdH_SNPs > 297)
+1-nrow(d)/n
+```
+Which means we have filtered out $\sim$ 25% of the data set and kept the remaining $\sim$ 75% of the dataset for the remaining analysis.
+
+<br/>
+
+### 2. Displaying genomic data
+
+Variation in recombination rate (rho_kb) and nucleotide diversity (qp.site) along chomosome 5:
+
+```{r}
+
+d_chr5 <- filter(d, chr==5) # chromosome 5
+
+ggplot(d_chr5, aes(x=dist_cent)) +
+  geom_area(aes(y=qp.site), fill="blue") +
+  geom_area(aes(y=rho_kb), fill="red") +
+  theme_minimal() +
+  labs(title="Patterns of variation along chomosome 5") +
+  xlab("Distance to Centromere (dist_cent)") +
+  ylab("Recombination rate(blue) and polymorphism(red)") +
+  geom_vline(xintercept = 0, lty=1)
+```
+
+<br/>
+
+### 3. Summarizing levels of Recombination and polymorphism in M. truncatula.
+
+Distribution of nucleotide diversity (qp.site) along the 7 chromosomes of M. truncatula:
+
+```{r}
+ggplot(d, aes(x=chr, y=qp.site)) + # using all chromosomes from dataset
+  geom_boxplot(aes(color=chr)) +
+  theme_minimal() +
+  labs(title="Distribution of nucleotide diversity along the 7 chromosomes") +
+  xlab("Chromosomes") +
+  ylab("Polymorphism")
+```
+
+Distribution of recombination rate (rho_kb) along the 7 chromosomes of M. truncatula:
+
+```{r}
+ggplot(d, aes(x=chr, y=rho_kb)) +
+  geom_boxplot(aes(color=chr)) +
+  theme_minimal() +
+  labs(title="Distribution of recombination rate (rho_kb) among different chromosomes") +
+  xlab("Chromosomes") +
+  ylab("Recombination rate")
+```
+
+The below plots give a better overview if you want to see the total distribution. Inspiration is taken from Branca et al - Supporting Information.
+
+```{r}
+ggplot(d, aes(x=dist_cent)) +
+  geom_area(aes(y=qp.site), fill="red") +
+  geom_area(aes(y=rho_kb), fill="blue") +
+  theme_minimal() +
+  labs(title="Distribution of recombination rate (rho_kb) and polymporphism (qp.site) along the 7 chromosomes") +
+  xlab("Distance to Centromere") +
+  ylab("ThetaW per site") +
+  facet_wrap(~chr)
+```
+
+Polymorphism along chromosomes:
+
+```{r}
+summary(d$qp.site)
+```
+
+Recombination rate along chromosomes:
+```{r}
+summary(d$rho_kb)
+```
+
+For polymorphism it does not make a big difference if you summarise with the mean or median, but the recombination rate contains outliers (look at min.), so median summarise recombination rate better. Frequency containing outliers should never be analyzed with a confidence interval based on the t-distribution.  We will calculate the CI by bootstrapping.
+
+```{r}
+# function to obtain R-Squared from the data. From: https://www.statmethods.net/advstats/bootstrapping.html
+rsq <- function(formula, data, indices) {
+  d <- data[indices,]
+  fit <- lm(formula, data=d)
+  return(summary(fit)$r.square)
+} 
+```
+
+#### Recombination rate for each chromosome
+```{r}
+
+d_mm <- d %>%
+  group_by(chr) %>%
+  select(chr, rho_kb, rho_theta, qw.site)
+
+unique(select(d, chr), incomparables=FALSE) # chr: 1-5, 7-8
+
+mmsd <- data.frame(chr1=0.0,chr2=0.0,chr3=0.0,chr4=0.0,chr5=0.0,chr7=0.0,chr8=0.0)
+
+# calculate means, median, standard deviation and ci
+calc_mmsd = function(){
+              for(i in 1:7){
+                chr_i <- filter(d_mm, chr==i)$rho_kb
+                chr_i_plus <- filter(d_mm, chr==i+1)$rho_kb
+                n <- length(chr_i)
+                if(i==6 || i==7){
+                  mmsd["median",i] <- median(chr_i_plus)
+                  # bootstrapping with 100 replications 
+                  boot <- boot(data=d_mm, statistic=rsq, R=100, formula=rho_kb~chr==i+1)
+                  mmsd["2.5%",i] <- confint(boot)[1] # lower bound for CI
+                  mmsd["97.5%",i] <- confint(boot)[2] # upper bound for CI
+                } else {
+                  mmsd["median",i] <- median(chr_i)
+                  boot <- boot(data=d_mm, statistic=rsq, R=100, formula=rho_kb~chr==i)
+                  mmsd["2.5%",i] <- confint(boot)[1]
+                  mmsd["97.5%",i] <- confint(boot)[2]
+                }
+              }
+            return(mmsd[-1,])
+            }
+
+mmsd <- calc_mmsd()
+mmsd
+
+```
+The table above shows the observed median and confidence interval by bootstrapping of the recombination rate for each chromosome (1-5,7-8). The confidence interval for the population median of the recombination rate for chromosome 1 is example:
+
+$0.004950857 < median < 0.020489631$.
+
+```{r}
+# assertion: high selfing rate (rho_theta) => (rho_kb)/3 = mutations
+
+rrm <- mmsd[1:3,]
+rownames(rrm) <- c("recombination rate median","ratio median", "mutation median")
+
+# calculate medians
+calc_rrm = function(){
+              for(i in 1:7){
+                chr_i <- filter(d_mm, chr==i)
+                chr_i_plus <- filter(d_mm, chr==i+1)
+                if(i==6 || i==7){
+                  rrm["recombination rate median",i] <- median(chr_i_plus$rho_kb)
+                  rrm["ratio median",i] <- median(chr_i_plus$rho_theta)
+                  rrm["mutation median",i] <- median(chr_i_plus$qw.site)
+                } else {
+                  rrm["recombination rate median",i] <- median(chr_i$rho_kb)
+                  rrm["ratio median",i] <- median(chr_i$rho_theta)
+                  rrm["mutation median",i] <- median(chr_i$qw.site)
+                }
+              }
+              return(rrm)
+}
+
+rrm <- calc_rrm()
+rrm
+
+```
+Assertion: high selfing rate (rho_theta) => (rho_kb)/3 = mutations. Chromosome 3 and 5 has the biggest ratio median, so it is obvious to check if they support the assertion mentioned.
+```{r}
+select(rrm, chr3)[3,]/select(rrm, chr3)[1,]
+select(rrm, chr5)[3,]/select(rrm, chr5)[1,]
+```
+Chromosome 5 supports the assertion, but 3 does not. In this case, the chromosome with highest selfing rate supports the assertion.
+
+```{r}
+# rho_theta - ratio 
+# rho_kb - recombination 
+
+d_rrm <- select(d, chr, rho_theta, rho_kb, qw.site, dist_cent) %>%
+  group_by(chr)
+
+ggplot(data=d_rrm, aes(x=qw.site, y=rho_kb)) +
+  geom_point(aes(color=chr)) +
+  geom_smooth(method='lm', se=F) +
+  geom_abline(slope=1/3) +
+  theme_minimal() +
+  xlab("ThetaW per site") +
+  ylab("Recombination rate") +
+  facet_wrap(~chr)
+```
+
+By looking at the above scatterplots it's hard to reject the papers assertion, because we can't read the exact numbers. But from the table, we have chromosome 5 to support the assertion.
+
+<br/>
+
+### 4. A test of an evolutionary hypothesis
+With variation in nucleotide diversity (qp.site) we could expect low high recombination rate and negative correlation with gene density. We will reproduce the analysis from the paper by testing the hypothesis described in the exercise in M. truncatula.
+For that, we will use linear models for explaining genetic diversity and visualize patterns for all chromosomes with scatterplots.
+
+#### 4.1 Genetic variations between window
+
+We will make linear models, plots and anova (type II) on:
+
+* qp.site $\sim$ rho_kb $\cdot$ chr $\cdot$ gene_dens
+
+```{r}
+glm_all = glm(qp.site~rho_kb*chr*gene_dens, data=d) # using glm because lm is very sensitive to order
+Anova(glm_all, type = 2)
+```
+From the Analysis of Deviance Table we can see that rho_kb and gene_dens have a high likelihood-ratio (especially rho_kb). We will look further on these variables by making a linear model for each of the variables and then look at their $R^2$.
+
+```{r}
+calc_rsquared = function(d, var_list){
+  df <- data.frame("Type"=c("rho_kb", "chr", "gene_dens"), "R squared" = c(0,0,0))
+  model_r = lm(qp.site~rho_kb, data=d)
+  model_c = lm(qp.site~chr, data=d)
+  model_g = lm(qp.site~gene_dens, data=d)
+  df$R.squared[1] <- summary(model_r)$r.squared
+  df$R.squared[2] <- summary(model_c)$r.squared
+  df$R.squared[3] <- summary(model_g)$r.squared
+  return(df)
+}
+
+R.squared_df <- calc_rsquared(d)
+R.squared_df
+```
+
+```{r}
+barplot(R.squared_df$R.squared, names.arg=R.squared_df$Type, ylab="R^2", main="R^2 with qp.site as response variable", col=R.squared_df$Type)
+```
+Clearly, rho_kb covariates (more) with qp.site, which can be seen further in the next section. With a high $R^2$ (close to 1) you can predict the mean behavior and collective behavior.
+
+#### 4.2 M. truncatula genome patterns along chromosomes
+
+```{r}
+ggplot(data=d, aes(x=rho_kb, y=qp.site)) +
+  geom_point(aes(color=chr)) +
+  geom_smooth(method="lm", se = FALSE) +
+  labs(title="qp.site~rho_kb along chromosomes") +
+  xlab("Recombination Rate") +
+  ylab("Nucleotide diversity") +
+  theme_minimal() +
+  facet_wrap(~chr)
+```
+The above scatterplots clearly shows that background selection have more influence (for all chromosomes) in regions that have a low recombination rate. But with a $R^2$-value on $0.185$ we can't use the regression line to predict. All chromosomes shows positive correlation.
+
+
+```{r}
+ggplot(data=d, aes(x=gene_dens, y=qp.site)) +
+  geom_point(aes(color=chr)) +
+  geom_smooth(method="lm", se = FALSE) +
+  labs(title="qp.site~gene_dens along chromosomes") +
+  xlab("Gene density") +
+  ylab("Nucleotide diversity") +
+  theme_minimal() +
+  facet_wrap(~chr)
+```
+
+In the above scatterplots we see negative correlation as the conclusion says in the paper, which is expected if diversity is shaped by selection. Gene-dense regions should also be exhibiting comparely less polymorphism (less diversity) than regions that are gene poor.
+
+All chromosomes don't follow the exact same pattern, but they follow the positive/negative correlations (recombination rate/gene density) as mentioned in the paper. By making linear models and visualizing patterns in the M. truncatula genetic diversity, we can support the predictions of the background selection hypothesis.
+
+We can't exclude other covariate to confounding the background selection hypothesis prediction. One interesting covariate could be ThetaW.
+
+```{r}
+ggplot(data=d, aes(x=qw.site, y=qp.site)) +
+  geom_point(aes(color=chr)) +
+  geom_smooth(method="lm", se = FALSE) +
+  labs(title="qp.site~qw.site along chromosomes") +
+  xlab("ThetaW per site") +
+  ylab("Nucleotide diversity") +
+  theme_minimal() +
+  facet_wrap(~chr)
+```
+
+From the above scatterplots, it is clear that they have a positive correlation.
+
+```{r}
+lm_thetaw = lm(qp.site~qw.site, data=d)
+summary(lm_thetaw)$r.squared
+```
+
+And with a $R^2$ value with 0.923 we can say they have a strong positive correlation. Because it's a $R^2$ on the chromosomes, the regression line could be used to predict mean behavior, collective behavior, but can not be used to make predictions on individual change. It makes sense they have a significantly positive correlation, since they both represent scaled mutation, but are not estimated the same way.
+
+<br/>
+
+### 5. Tracking footprints of recent and intense selection in the Medicago truncatula genome. 
+
+#### 5.1 Selective sweep
+
+Regions with low diversity (qp.site) are obvious posteriori regions to search for targets of recent species-wide selective sweep [Branca et al]. We will now find the least polymorphic windows (the 5% least polymorphic windows within the genome).
+
+```{r}
+# among the 5% least polymorphic windows, the upper bound is:
+five_percent_upper <- max(sort(d$qp.site, decreasing=FALSE)[1:(nrow(d)/100*5)])
+
+# least polymorphic windows  
+least_pol_win <- filter(d, qp.site <= five_percent_upper)
+
+# gene density estimated as the proportion of window that is predicted to be coding (percentage).
+ggplot(data=least_pol_win, aes(x=chr, y=gene_dens)) +
+  geom_point(aes(color=chr)) +
+  labs(title="Selective sweep along chromosomes") +
+  ylab("Gene density") +
+  xlab("Chromosome") +
+  theme_minimal()
+```
+If we look close, we can see that the least polymorphic windows are located mostly at chromosome 1, 3 and 7. It is more clear in the below barplot.
+
+```{r}
+barplot(least_pol_win$gene_dens, names.arg=least_pol_win$chr, col=least_pol_win$chr,
+        ylab="Gene density", xlab="Chromosome", main="Selective sweep along chromosomes")
+```
+
+#### 5.2 Location of least polymorphic windows distribution on chromosomes 
+		
+```{r}
+# Group windows into larger segments compromising 20 windows and count the number of windows containing least polymorphic in each segment. Since we have 1409 different windows (after filtering) which is the same as the number of rows, we will just split the data set in equal parts (with 20 rows in each): 1880/20 = 70 segments/groups.
+
+group_size <- round(nrow(d)/20, digits=0) # 70
+
+d <- d %>%
+          mutate(segment=sample(group_size, size=nrow(d), replace = T, prob = NULL))
+
+least_seg_df <- data.frame(unique(select(d, segment), incomparables=FALSE))
+
+# function that calculate the mean value for getting a least polymorphic window per segment
+calc_mean_least_in_segment <- function(df){
+  res = c(1:group_size)
+  for(i in 1:group_size){
+    res[i] <- nrow(filter(df, segment==i))
+  }
+  return(mean(res))
+}
+
+calc_mean_least_in_segment(least_seg_df)
+```
+The mean value of getting a least polymorphic window per segment is 1. 
+		
+For capturing the fact that windows with low diversity are occuring "at random" along the chromosome on each segment, we will test the hypotheses stated below.
+
+##### Hypothesis tesing
+ 
+$H_0$: The location of least polymorphic windows is randomly distributed along the chromosomes.
+
+$H_A$: The location of least polymorphic windows is not randomly distributed along the chromosomes.
+
+For computing the test statistic, we will use the binomial distribution as null distribution, because it provides the probability distribution for the number of "successes" in a fixed number of independent trials, when the probability of suceess is the same in each trial.
+
+```{r}
+bin_test = dbinom(x=1:group_size, size=group_size, prob=0.2) # 1/20=0.05
+# null distribution for the test statistic
+null_df = data.frame(chr=as.factor(sample(c(1:5,7:8), 70, replace=T)),
+                     segment=1:group_size, pvalue=bin_test)
+null_df
+```
+
+```{r}
+# Visualizing the null distribution
+ggplot(null_df, aes(x=segment, y=pvalue, color=chr)) +
+  geom_col() +
+  labs(title="Null distribution for the test statistic along the 7 chromosomes") +
+  ylab("Probability (p-value)") +
+  xlab("Segment/groups") +
+  theme_minimal() +
+  xlim(c(0,30))
+```
+
+By looking at the null distributions (Poisson-likely) along the chromosomes in each segment, it seems like the location of least polymorphic windows is randomly distributed. But we have to check for all chromosomes if windows with low diversity have a probability (>0) for occurring "at random" on each segment.
+
+```{r}
+# This function verifies that all segments/groups have a probability higher than 0 for a window with low diversity will occur.
+verify_random_dist = function(d){
+  res = c(1:7)
+  for(i in c(1:5,7:8)){
+    if(nrow(filter(filter(d, chr==(i)), pvalue <= 0)) != 0){
+      p = paste(c("The location of least polymorphic windows in Chromosome ", i, " is NOT randomly
+                  distributed"), collapse="")
+      print(p)
+    } else {
+      p = paste(c("The location of least polymorphic windows in Chromosome ", i, " is randomly distributed"), collapse="")
+      print(p)
+    }
+  }
+}
+
+verify_random_dist(null_df)
+```
+
+Which means there is a probability > 0 that windows with low diversity occur in a segment. Some segments have a higher probability for a window with low diversity will occur than others, but since this is a random rample from the data set, we can accept the hypothesis about the location of least polymorphic windows is randomly distributed along the chromosomes.
+
+#### 5.3 Tajima's D
+
+Negative Tajima's D means an excess of rare variants (SNPs) while positive Tajima's D means an excess of frequent SNPs relative to a neutrally evolving region.
+
+```{r}
+# linear model with nucleotide diversity as response varable and Tajima's D as explanatory variable.
+lm_tqp = lm(TajimasD~qp.site, data=d)
+summary(lm_tqp)$r.squared # R^2 = 0.4749
+
+ggplot(d, aes(x=TajimasD, y=qp.site)) +
+  geom_point(aes(color=chr)) +
+  geom_smooth(method="lm", se = FALSE) +
+  labs(title="qp.site~TajimasD along chromosomes with R^2=0.4749") +
+  xlab("Tajima's D") +
+  ylab("Nucleotide diversity") +
+  theme_minimal() +
+  facet_wrap(~chr) +
+  geom_vline(xintercept = 0, lty=2)
+```
+
+Negative Tajima's D-values have a positive correlation with polymorphism; their $R^2=0.4749$. It can be argued that the regression line can be used to predict qp.site (Theta_pi) from Tajima's D. It makes sense that rare alleles have lower polymorphism. But in exercise 4 we saw that qp.site has a negative correlation with gene density, so genomes with high density could obscure the relationship between Tajima's D and qp.site.
+
+We saw in exercise 4.1 that qp.site was used as response variable for gene density: $R^2$=0.091.
+
+```{r}
+lm_tajima = lm(TajimasD~gene_dens, data=d)
+summary(lm_tajima)$r.squared
+```
+
+With a $R^2$-value on 0.0037, we can say that qp.site~gene_dens is a better model fit than TajimasD~gene_dens. 

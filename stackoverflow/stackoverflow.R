@@ -52,7 +52,6 @@ distOcc = function(d, year){
 
 
 distLanguage = function(d, year){
-  #ldf <- data.frame(d[1,c(4:length(d))])
   languages <- colnames(d[4:length(d)])
   val_list = c(1:length(languages))
   for(i in 1:length(languages)){
@@ -170,9 +169,13 @@ distOcc(d15, 2015)
 distLanguage(d15, 2015)
 
 #### Distribution of occupations from 2016 ####
-d16 <- d16[-c(1,2),c(3,10)]
-colnames(d16) = c("country","occupation")
+languages <- unlist(strsplit(as.character(d16[970,17]), ';'))
+d16 <- d16[-c(1,2),c(3,6,10,17)]
+colnames(d16) = c("country","age","occupation")
+charmatch("iOS", d16[1,4])
+
 distOcc(d16, 2016)
+distLanguage(d16, 2016)
 
 #### Distribution of occupations from 2017 ####
 d17 <- d17[-c(1,2),c(4,16)]
